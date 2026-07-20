@@ -1,0 +1,210 @@
+services:
+
+  # ============================================================
+  # PostgreSQL - SQL Database
+  # ============================================================
+  postgres:
+    image: postgres:17
+    container_name: de-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: dataengineering
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d dataengineering"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    networks:
+      - data-network
+
+
+  # ============================================================
+  # pgAdmin - PostgreSQL Web IDE
+  # ============================================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: de-pgadmin
+    restart: unless-stopped
+
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+
+    ports:
+      - "5050:80"
+
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    networks:
+      - data-network
+
+
+  # ============================================================
+  # Apache Spark Master
+  # ============================================================
+  spark-master:
+    image: apache/spark:4.2.0-scala2.13-java17-python3-r-ubuntu
+    container_name: spark-master
+    restart: unless-stopped
+
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.master.Master
+
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+
+    ports:
+      # Spark cluster connection
+      - "7077:7077"
+
+      # Spark Master Web UI
+      - "8080:8080"
+
+    volumes:
+      - shared_data:/opt/spark/data
+
+    networks:
+      - data-network
+
+
+  # ============================================================
+  # Apache Spark Worker
+  # ============================================================
+  spark-worker:
+    image: apache/spark:4.2.0-scala2.13-java17-python3-r-ubuntu
+    container_name: spark-worker
+    restart: unless-stopped
+
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - spark://spark-master:7077
+
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+
+      # Keep resource usage reasonable for 8 GB laptop
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 2g
+
+    depends_on:
+      - spark-master
+
+    volumes:
+      - shared_data:/opt/spark/data
+
+    networks:
+      - data-network
+
+
+  # ============================================================
+  # JupyterLab - PySpark / Spark SQL
+  # ============================================================
+  jupyter:
+    image: quay.io/jupyter/pyspark-notebook:latest
+    container_name: de-jupyter
+    restart: unless-stopped
+
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+
+    ports:
+      # JupyterLab
+      - "8888:8888"
+
+      # Spark Application UI
+      - "4040:4040"
+
+    volumes:
+      # Persistent notebooks
+      - jupyter_data:/home/jovyan/work
+
+      # Shared data between Jupyter and Spark
+      - shared_data:/home/jovyan/data
+
+    command:
+      - start-notebook.py
+      - --ServerApp.token=
+      - --ServerApp.password=
+
+    depends_on:
+      - spark-master
+      - postgres
+      - minio
+
+    networks:
+      - data-network
+
+
+  # ============================================================
+  # MinIO - S3 Compatible Object Storage
+  # ============================================================
+  minio:
+    image: minio/minio:latest
+    container_name: de-minio
+    restart: unless-stopped
+
+    command: server /data --console-address ":9001"
+
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+
+    ports:
+      # S3 API
+      - "9000:9000"
+
+      # MinIO Web Console
+      - "9001:9001"
+
+    volumes:
+      - minio_data:/data
+
+    networks:
+      - data-network
+
+
+# ==============================================================
+# Docker Network
+# ==============================================================
+networks:
+  data-network:
+    driver: bridge
+
+
+# ==============================================================
+# Persistent Storage
+# ==============================================================
+volumes:
+
+  # PostgreSQL database files
+  postgres_data:
+
+  # pgAdmin configuration
+  pgadmin_data:
+
+  # Jupyter notebooks
+  jupyter_data:
+
+  # MinIO objects
+  minio_data:
+
+  # Files shared between Spark and Jupyter
+  shared_data:
